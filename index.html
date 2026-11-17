@@ -1,0 +1,679 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IELTS 每日模擬機考系統</title>
+    <script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-gray-50 text-gray-900 overflow-hidden">
+    <div id="root"></div>
+    <script type="text/babel">
+        const { useState, useEffect, useCallback, memo } = React;
+
+        const Timer = memo(({ active, onTimeUp }) => {
+            const [timeLeft, setTimeLeft] = useState(20 * 60);
+
+            useEffect(() => {
+                let timer;
+                if (active && timeLeft > 0) {
+                    timer = setInterval(() => setTimeLeft(prev => prev - 1), 1000);
+                } else if (active && timeLeft <= 0) {
+                    onTimeUp();
+                }
+                return () => clearInterval(timer);
+            }, [active, timeLeft, onTimeUp]);
+
+            const formatTime = (secs) => {
+                const m = Math.floor(secs / 60).toString().padStart(2, '0');
+                const s = (secs % 60).toString().padStart(2, '0');
+                return `${m}:${s}`;
+            };
+
+            if (!active && timeLeft === 20 * 60) return null;
+
+            return (
+                <div className={`flex items-center px-4 py-1.5 rounded-full border font-mono text-lg font-bold ${timeLeft < 300 && active ? 'bg-red-500 text-white border-red-400 animate-pulse' : 'bg-blue-800 text-blue-50 border-blue-700'}`}>
+                    <i className="fas fa-clock mr-2"></i>
+                    {formatTime(timeLeft)}
+                </div>
+            );
+        });
+
+        function App() {
+            const [activeTab, setActiveTab] = useState('home');
+            const [testData, setTestData] = useState(null);
+            const [answers, setAnswers] = useState({});
+            const [testState, setTestState] = useState('idle');
+            const [vocab, setVocab] = useState([]);
+            const [history, setHistory] = useState([]);
+            const [currentReview, setCurrentReview] = useState(null);
+            const [toast, setToast] = useState(null);
+            const [contextMenu, setContextMenu] = useState({ visible: false, x: 0, y: 0, text: '', range: null });
+            
+            // 👉 在這裡新增這一行：用來控制翻譯按鈕的開關狀態
+            const [showTranslation, setShowTranslation] = useState(false);
+            useEffect(() => {
+                const savedVocab = JSON.parse(localStorage.getItem('ielts_vocab') || '[]');
+                setVocab(savedVocab);
+                const savedHistory = JSON.parse(localStorage.getItem('ielts_history') || '[]');
+                setHistory(savedHistory);
+
+                const handleClickOutside = () => setContextMenu({ visible: false, x: 0, y: 0, text: '', range: null });
+                document.addEventListener('click', handleClickOutside);
+                return () => document.removeEventListener('click', handleClickOutside);
+            }, []);
+
+            const showToast = (msg) => {
+                setToast(msg);
+                setTimeout(() => setToast(null), 3000);
+            };
+
+            const handleImportTest = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.passageTitle && data.questions) {
+                            setTestData(data);
+                            setAnswers({});
+                            setTestState('ongoing');
+                            setActiveTab('test');
+                            showToast('✅ 考題匯入成功！測驗開始。');
+                        } else {
+                            showToast('❌ 考題格式不正確');
+                        }
+                    } catch (err) {
+                        showToast('❌ 檔案解析失敗，請確認是否為有效 JSON');
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            const handleExportHistory = () => {
+                const data = { history, vocab };
+                const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `ielts_backup_${new Date().toISOString().slice(0,10)}.json`;
+                a.click();
+                URL.revokeObjectURL(url);
+                showToast('✅ 備份已成功下載！');
+            };
+
+            const handleImportHistory = (e) => {
+                const file = e.target.files[0];
+                if (!file) return;
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const data = JSON.parse(event.target.result);
+                        if (data.history || data.vocab) {
+                            const importedHistory = data.history || [];
+                            const importedVocab = data.vocab || [];
+                            const currentHistoryIds = new Set(history.map(item => item.id));
+                            const currentVocabIds = new Set(vocab.map(item => item.id));
+                            
+                            const newHistoryToAdd = importedHistory.filter(item => !currentHistoryIds.has(item.id));
+                            const newVocabToAdd = importedVocab.filter(item => !currentVocabIds.has(item.id));
+
+                            const mergedHistory = [...newHistoryToAdd, ...history].sort((a, b) => b.id - a.id);
+                            const mergedVocab = [...newVocabToAdd, ...vocab].sort((a, b) => b.id - a.id);
+                            setHistory(mergedHistory);
+                            setVocab(mergedVocab);
+                            localStorage.setItem('ielts_history', JSON.stringify(mergedHistory));
+                            localStorage.setItem('ielts_vocab', JSON.stringify(mergedVocab));
+                            showToast('✅ 備份還原成功！');
+                        } else {
+                            showToast('❌ 備份檔格式不符');
+                        }
+                    } catch (err) {
+                        showToast('❌ 讀取失敗');
+                    }
+                };
+                reader.readAsText(file);
+                e.target.value = '';
+            };
+
+            const handleContextMenu = (e) => {
+                const selection = window.getSelection();
+                if (selection && selection.toString().trim().length > 0 && selection.rangeCount > 0) {
+                    e.preventDefault();
+                    setContextMenu({
+                        visible: true,
+                        x: e.clientX,
+                        y: e.clientY,
+                        text: selection.toString().trim(),
+                        range: selection.getRangeAt(0).cloneRange()
+                    });
+                } else {
+                    setContextMenu({ visible: false, x: 0, y: 0, text: '', range: null });
+                }
+            };
+
+            const highlightText = (e) => {
+                e.preventDefault();
+                if (!contextMenu.range) return;
+                try {
+                    const range = contextMenu.range;
+                    const mark = document.createElement('mark');
+                    mark.className = 'bg-yellow-300 text-black px-1 rounded shadow-sm';
+                    const extract = range.extractContents();
+                    mark.appendChild(extract);
+                    range.insertNode(mark);
+                } catch (err) {
+                    showToast('⚠️ 標記失敗：無法處理跨段落的複雜選取');
+                }
+                window.getSelection().removeAllRanges();
+                setContextMenu({ visible: false, x: 0, y: 0, text: '', range: null });
+            };
+
+            const addToVocab = async (e) => {
+                e.preventDefault();
+                const word = contextMenu.text;
+                setContextMenu({ visible: false, x: 0, y: 0, text: '', range: null });
+                window.getSelection().removeAllRanges();
+                showToast(`翻譯中: ${word}...`);
+                try {
+                    const res = await fetch(`https://api.mymemory.translated.net/get?q=${encodeURIComponent(word)}&langpair=en|zh-TW`);
+                    const data = await res.json();
+                    const translated = data.responseData.translatedText;
+                    const newVocab = {
+                        id: Date.now(),
+                        word: word,
+                        translation: translated,
+                        date: new Date().toLocaleDateString('zh-TW')
+                    };
+                    const updatedVocab = [newVocab, ...vocab];
+                    setVocab(updatedVocab);
+                    localStorage.setItem('ielts_vocab', JSON.stringify(updatedVocab));
+                    showToast(`✅ 已存入單字庫: ${word} -> ${translated}`);
+                } catch (err) {
+                    showToast('❌ 翻譯失敗，請檢查網路連線');
+                }
+            };
+
+            const deleteVocab = (id) => {
+                const updated = vocab.filter(v => v.id !== id);
+                setVocab(updated);
+                localStorage.setItem('ielts_vocab', JSON.stringify(updated));
+                showToast('🗑️ 單字已刪除');
+            };
+
+            const updateVocabNote = (id, newNote) => {
+                const updated = vocab.map(v => v.id === id ? { ...v, note: newNote } : v);
+                setVocab(updated);
+                localStorage.setItem('ielts_vocab', JSON.stringify(updated));
+            };
+
+            const deleteHistory = (id) => {
+                if(window.confirm('確定要刪除這筆測驗紀錄嗎？此動作無法復原。')) {
+                    const updated = history.filter(h => h.id !== id);
+                    setHistory(updated);
+                    localStorage.setItem('ielts_history', JSON.stringify(updated));
+                    showToast('🗑️ 測驗紀錄已刪除');
+                }
+            };
+            
+            const handleAnswerChange = (id, val) => {
+                setAnswers(prev => ({ ...prev, [id]: val }));
+            };
+
+            const calculateBand = (correct) => {
+                if (correct >= 13) return '9.0';
+                if (correct >= 11) return '8.0';
+                if (correct >= 9) return '7.0';
+                if (correct >= 7) return '6.0';
+                if (correct >= 5) return '5.0';
+                if (correct >= 3) return '4.0';
+                return '0.0 - 3.0';
+            };
+
+            const submitTest = useCallback(() => {
+                let correctCount = 0;
+                const errors = { tfng: 0, summary: 0, mcq: 0 };
+                testData.questions.forEach(q => {
+                    const userAns = (answers[q.id] || '').toString().toLowerCase().trim();
+                    const correctAns = q.answer.toLowerCase().trim();
+                    if (userAns === correctAns || (q.type === 'summary' && userAns.includes('property') && correctAns.includes('property'))) {
+                        correctCount++;
+                    } else {
+                        errors[q.type] = (errors[q.type] || 0) + 1;
+                    }
+                });
+
+                const scoreData = {
+                    id: Date.now(),
+                    date: new Date().toLocaleString('zh-TW'),
+                    correct: correctCount,
+                    total: testData.questions.length,
+                    band: calculateBand(correctCount),
+                    answers: answers,
+                    errors: errors,
+                    passageTitle: testData.passageTitle,
+                    passageParagraphs: testData.passageParagraphs,
+                    questions: testData.questions,
+                    translation: testData.translation,
+                    summaryTitle: testData.summaryTitle,
+                    summaryText: testData.summaryText
+                };
+
+                const updatedHistory = [scoreData, ...history];
+                setHistory(updatedHistory);
+                localStorage.setItem('ielts_history', JSON.stringify(updatedHistory));
+                
+                setCurrentReview(scoreData);
+                // 每次交卷時，強制把翻譯收起來
+                setShowTranslation(false);
+                setTestState('submitted');
+                setActiveTab('review');
+                showToast('🎉 測驗已提交！請檢視您的成績與解析。');
+            }, [answers, history, testData]);
+
+            const reviewData = currentReview;
+            const weakness = [];
+            if (reviewData) {
+                if (reviewData.errors.tfng > 1) weakness.push("判斷作者意圖與細節辨識 (True/False/Not Given)");
+                if (reviewData.errors.summary > 1) weakness.push("擷取段落大意與精準字數控制 (Summary Completion)");
+                if (reviewData.errors.mcq > 0) weakness.push("綜合理解與干擾項排除 (Multiple Choice)");
+                if (weakness.length === 0) weakness.push("表現優異，請繼續保持目前的閱讀節奏！");
+            }
+
+            const renderSummaryBlock = () => {
+                if (!testData || !testData.summaryText) return null;
+                const summaryQs = testData.questions.filter(q => q.type === 'summary');
+                if (summaryQs.length === 0) return null;
+
+                const startQ = summaryQs[0].id;
+                const endQ = summaryQs[summaryQs.length - 1].id;
+                
+                const parts = testData.summaryText.split(/(\{\{\d+\}\})/g);
+
+                return (
+                     <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+                        <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
+                            <h3 className="font-bold mb-2">Questions {startQ} - {endQ}</h3>
+                            <p className="text-sm font-bold">Complete the summary below. Choose NO MORE THAN TWO WORDS from the passage for each answer.</p>
+                        </div>
+                        {testData.summaryTitle && (
+                            <h4 className="font-bold text-center text-xl mb-4 text-gray-800">{testData.summaryTitle}</h4>
+                        )}
+                        <div className="leading-loose text-gray-800 text-lg text-justify">
+                            {parts.map((part, index) => {
+                                const match = part.match(/\{\{(\d+)\}\}/);
+                                if (match) {
+                                    const qId = parseInt(match[1]);
+                                    return (
+                                        <span key={index} className="inline-flex items-center mx-1">
+                                            <span className="font-bold text-blue-600 mr-1">{qId}.</span>
+                                            <input 
+                                                type="text" 
+                                                value={answers[qId] || ''} 
+                                                onChange={(e)=>handleAnswerChange(qId, e.target.value)} 
+                                                className="border-b-2 border-blue-400 bg-blue-50 w-32 px-2 py-1 text-center outline-none focus:border-blue-600 focus:bg-blue-100" 
+                                            />
+                                        </span>
+                                    );
+                                }
+                                return <span key={index}>{part}</span>;
+                            })}
+                        </div>
+                    </div>
+                );
+            };
+
+            return (
+                <div className="h-screen w-screen flex flex-col overflow-hidden bg-gray-50 font-sans selection:bg-yellow-200 text-gray-900">
+                    <header className="h-16 flex-shrink-0 bg-blue-900 text-white flex items-center justify-between px-6 shadow-md z-20">
+                        <div className="flex items-center space-x-2">
+                            <div className="bg-blue-700 text-white p-2 rounded-lg font-bold text-sm tracking-wide border border-blue-600">IELTS</div>
+                            <h1 className="text-xl font-bold text-white hidden md:block cursor-pointer" onClick={() => setActiveTab('home')}>Mock Test PWA</h1>
+                        </div>
+                        
+                        <div className="flex space-x-1">
+                            <button onClick={() => setActiveTab('home')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${activeTab === 'home' ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800'}`}>
+                                <i className="fas fa-home mr-1"></i> 首頁
+                            </button>
+                            <button onClick={() => { if(testData) setActiveTab('test'); else showToast('請先匯入考題！')}} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${activeTab === 'test' ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800'}`}>
+                                <i className="fas fa-file-alt mr-1"></i> 測驗區
+                            </button>
+                            <button onClick={() => setActiveTab('history')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${activeTab === 'history' ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800'}`}>
+                                <i className="fas fa-history mr-1"></i> 紀錄
+                            </button>
+                            <button onClick={() => setActiveTab('vocab')} className={`px-4 py-2 rounded-md font-medium text-sm transition-colors ${activeTab === 'vocab' ? 'bg-blue-700 text-white' : 'text-blue-100 hover:bg-blue-800'}`}>
+                                <i className="fas fa-book mr-1"></i> 單字庫
+                            </button>
+                        </div>
+                        {activeTab === 'test' && testState === 'ongoing' && (
+                            <Timer active={testState === 'ongoing'} onTimeUp={submitTest} />
+                        )}
+                    </header>
+
+                    {contextMenu.visible && (
+                        <div style={{ top: contextMenu.y, left: contextMenu.x }} className="fixed z-50 flex flex-col bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
+                            <button onMouseDown={highlightText} className="flex items-center px-4 py-2 hover:bg-gray-100 text-sm font-medium transition text-gray-800 w-full text-left">
+                                <i className="fas fa-highlighter w-4 h-4 mr-2 text-yellow-500"></i> 螢光筆標記
+                            </button>
+                            <button onMouseDown={addToVocab} className="flex items-center px-4 py-2 hover:bg-gray-100 text-sm font-medium transition text-gray-800 w-full text-left">
+                                <i className="fas fa-plus w-4 h-4 mr-2 text-blue-500"></i> 存入單字庫並翻譯
+                            </button>
+                        </div>
+                    )}
+
+                    <main className="flex-1 min-h-0 flex flex-row overflow-hidden relative">
+                        {activeTab === 'home' && (
+                            <div className="flex-1 flex flex-col items-center justify-center p-6 bg-white overflow-y-auto w-full">
+                                <h1 className="text-4xl font-bold text-blue-900 mb-8">IELTS 模擬機考控制中心</h1>
+                                <div className="flex flex-col md:flex-row gap-6 max-w-4xl w-full justify-center">
+                                    <div className="bg-blue-50 p-8 rounded-2xl border border-blue-100 flex-1 flex flex-col items-center text-center shadow-sm">
+                                        <div className="bg-blue-100 p-4 rounded-full mb-4"><i className="fas fa-file-import text-3xl text-blue-600"></i></div>
+                                        <h2 className="text-2xl font-bold text-gray-800 mb-2">開始新測驗</h2>
+                                        <p className="text-gray-600 mb-6">點擊下方按鈕匯入考題檔案 (.json)</p>
+                                        <input type="file" id="importTest" className="hidden" accept=".json" onChange={handleImportTest} />
+                                        <label htmlFor="importTest" className="cursor-pointer bg-blue-600 hover:bg-blue-700 text-white px-8 py-3 rounded-lg font-bold shadow transition flex items-center">
+                                            <i className="fas fa-upload mr-2"></i> 匯入考題 (.json)
+                                        </label>
+                                    </div>
+                                    <div className="bg-green-50 p-8 rounded-2xl border border-green-100 flex-1 flex flex-col items-center text-center shadow-sm">
+                                        <div className="bg-green-100 p-4 rounded-full mb-4"><i className="fas fa-database text-3xl text-green-600"></i></div>
+                                        <h2 className="text-2xl font-bold text-gray-800 mb-2">備份與還原</h2>
+                                        <p className="text-gray-600 mb-6">定期下載歷史紀錄與單字庫</p>
+                                        <div className="flex flex-col space-y-3 w-full">
+                                            <button onClick={handleExportHistory} className="w-full bg-white hover:bg-gray-50 border border-green-300 text-green-700 px-6 py-3 rounded-lg font-bold shadow-sm transition flex items-center justify-center">
+                                                <i className="fas fa-download mr-2"></i> 匯出本機紀錄備份
+                                            </button>
+                                            <input type="file" id="importBackup" className="hidden" accept=".json" onChange={handleImportHistory} />
+                                            <label htmlFor="importBackup" className="cursor-pointer w-full bg-green-600 hover:bg-green-700 text-white px-6 py-3 rounded-lg font-bold shadow transition flex items-center justify-center">
+                                                <i className="fas fa-upload mr-2"></i> 匯入歷史紀錄備份
+                                            </label>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        )}
+
+                        {activeTab === 'test' && testData && (
+                            <>
+                                <section className="flex-1 overflow-y-auto p-6 bg-white border-r border-gray-300" onContextMenu={handleContextMenu}>
+                                    <h2 className="text-2xl font-bold mb-6 text-center text-gray-900">{testData.passageTitle}</h2>
+                                    <div className="space-y-5 text-lg leading-relaxed text-gray-800 font-serif pb-6">
+                                        {testData.passageParagraphs.map((p, i) => (<p key={i} className="text-justify">{p}</p>))}
+                                    </div>
+                                </section>
+                                <section className="flex-1 overflow-y-auto p-6 bg-gray-50 pb-24" onContextMenu={handleContextMenu}>
+                                    <div className="max-w-2xl mx-auto space-y-6">
+                                        {testData.questions.filter(q => q.type === 'tfng').length > 0 && (
+                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+                                                <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
+                                                    <h3 className="font-bold mb-2">
+                                                        Questions {testData.questions.find(q=>q.type==='tfng').id} - {testData.questions.filter(q=>q.type==='tfng').pop().id}
+                                                    </h3>
+                                                    <p className="text-sm">Do the following statements agree with the information given?</p>
+                                                </div>
+                                                {testData.questions.filter(q => q.type === 'tfng').map(q => (
+                                                    <div key={q.id} className="mb-6 pb-6 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0">
+                                                        <p className="font-medium text-gray-800 mb-3"><span className="text-blue-600 font-bold mr-2">{q.id}.</span>{q.text}</p>
+                                                        <div className="flex space-x-6">
+                                                            {['True', 'False', 'Not Given'].map(opt => (
+                                                                <label key={opt} className="flex items-center space-x-2 cursor-pointer text-gray-700 hover:text-blue-600">
+                                                                    <input type="radio" name={`q${q.id}`} value={opt} checked={answers[q.id] === opt} onChange={(e) => handleAnswerChange(q.id, e.target.value)} className="w-4 h-4 text-blue-600" />
+                                                                    <span>{opt}</span>
+                                                                </label>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        {renderSummaryBlock()}
+
+                                        {testData.questions.filter(q => q.type === 'mcq').length > 0 && (
+                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+                                                <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
+                                                    <h3 className="font-bold mb-2">
+                                                        Questions {testData.questions.find(q=>q.type==='mcq').id} - {testData.questions.filter(q=>q.type==='mcq').pop().id}
+                                                    </h3>
+                                                    <p className="text-sm">Choose the correct letter, A, B, C, or D.</p>
+                                                </div>
+                                                {testData.questions.filter(q => q.type === 'mcq').map(q => (
+                                                    <div key={q.id} className="mb-8 pb-6 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0">
+                                                        <p className="font-medium text-gray-800 mb-4"><span className="text-blue-600 font-bold mr-2">{q.id}.</span>{q.text}</p>
+                                                        <div className="space-y-3">
+                                                            {q.options.map(opt => {
+                                                                const val = opt.charAt(0);
+                                                                return (
+                                                                    <label key={val} className="flex items-start space-x-3 cursor-pointer p-2 rounded hover:bg-gray-50 transition">
+                                                                        <input type="radio" name={`q${q.id}`} value={val} checked={answers[q.id] === val} onChange={(e) => handleAnswerChange(q.id, e.target.value)} className="mt-1 w-4 h-4 text-blue-600" />
+                                                                        <span className="text-gray-700">{opt}</span>
+                                                                    </label>
+                                                                );
+                                                            })}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </section>
+                            </>
+                        )}
+
+
+                        
+                        {/* REVIEW TAB (雙視窗對照版) */}
+                        {activeTab === 'review' && (
+                            <>
+                                {reviewData ? (
+                                    <>
+                                        {/* 左側視窗：英文原文 (獨立滾動) */}
+                                        <section className="flex-1 overflow-y-auto p-6 bg-white border-r border-gray-300" onContextMenu={handleContextMenu}>
+                                            <h2 className="text-2xl font-bold mb-6 text-center text-gray-900">{reviewData.passageTitle}</h2>
+                                            <div className="space-y-5 text-lg leading-relaxed text-gray-800 font-serif pb-6">
+                                                {reviewData.passageParagraphs.map((p, i) => (<p key={i} className="text-justify">{p}</p>))}
+                                            </div>
+                                        </section>
+
+                                        {/* 右側視窗：成績、解析、建議與翻譯按鈕 (獨立滾動) */}
+                                        <section className="flex-1 overflow-y-auto p-6 bg-gray-100" onContextMenu={handleContextMenu}>
+                                            
+                                            {/* 👉 新增的常駐懸浮按鈕：利用 fixed 屬性固定在畫面右下角，不管怎麼滑都不會不見 */}
+                                            <button 
+                                                onClick={() => setShowTranslation(!showTranslation)}
+                                                className="fixed bottom-24 right-8 bg-indigo-600 hover:bg-indigo-700 text-white px-6 py-3 rounded-full shadow-[0_10px_25px_-5px_rgba(0,0,0,0.3)] transition-all z-50 flex items-center justify-center font-bold text-lg border-2 border-indigo-200 hover:scale-105"
+                                            >
+                                                <i className={`fas ${showTranslation ? 'fa-times' : 'fa-language'} mr-2`}></i>
+                                                {showTranslation ? '關閉翻譯' : '看中文翻譯'}
+                                            </button>
+
+                                            <div className="max-w-2xl mx-auto space-y-6 pb-24">
+                                                
+                                                {/* 用邏輯切換顯示內容：點擊按鈕時，右邊版面會在「翻譯」與「解析」之間切換，完全不會擋到左邊的英文 */}
+                                                {showTranslation ? (
+                                                    
+                                                    /* ====== 翻譯模式 ====== */
+                                                    <div className="bg-white rounded-2xl p-8 shadow-sm border border-gray-200 animate-in fade-in slide-in-from-right-4">
+                                                        <h3 className="text-2xl font-bold text-gray-800 mb-6 flex items-center"><i className="fas fa-language mr-2 text-blue-600"></i> 文章完整中文翻譯</h3>
+                                                        <div className="space-y-4 text-gray-700 leading-relaxed text-justify text-base">
+                                                            {reviewData.translation.map((t, i) => (<p key={i} className="bg-gray-50 p-4 rounded-lg border border-gray-100">{t}</p>))}
+                                                        </div>
+                                                    </div>
+
+                                                ) : (
+
+                                                    /* ====== 解析模式 (包含先前放大的字體與排版) ====== */
+                                                    <>
+                                                        {/* 1. 分數面板 */}
+                                                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200 flex flex-col md:flex-row items-center justify-between">
+                                                            <div>
+                                                                <h2 className="text-2xl font-bold text-gray-800 mb-1 flex items-center"><i className="fas fa-award text-yellow-500 mr-2"></i> 測驗分析報告</h2>
+                                                                <p className="text-gray-500 text-sm">{reviewData.date}</p>
+                                                            </div>
+                                                            <div className="mt-4 md:mt-0 flex space-x-4 text-center">
+                                                                <div className="bg-green-50 px-4 py-2 rounded-xl border border-green-100">
+                                                                    <div className="text-2xl font-bold text-green-600">{reviewData.correct}/{reviewData.total}</div>
+                                                                    <div className="text-xs text-green-800 mt-1 font-medium">正確題數</div>
+                                                                </div>
+                                                                <div className="bg-blue-50 px-4 py-2 rounded-xl border border-blue-100">
+                                                                    <div className="text-2xl font-bold text-blue-600">Band {reviewData.band}</div>
+                                                                    <div className="text-xs text-blue-800 mt-1 font-medium">預估落點</div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* 2. 弱點分析 */}
+                                                        <div className="bg-red-50 rounded-2xl p-6 border border-red-100 shadow-sm">
+                                                            <h3 className="text-lg font-bold text-red-800 mb-3 flex items-center"><i className="fas fa-highlighter mr-2"></i> 弱點分析與強化建議</h3>
+                                                            <ul className="list-disc pl-5 space-y-1 text-red-700 font-medium text-sm">
+                                                                {weakness.map((w, i) => <li key={i}>{w}</li>)}
+                                                            </ul>
+                                                        </div>
+
+                                                        {/* 3. 逐題詳解 */}
+                                                        <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-200">
+                                                            <h3 className="text-xl font-bold text-gray-800 mb-6">逐題詳解</h3>
+                                                            <div className="space-y-6">
+                                                                {reviewData.questions.map(q => {
+                                                                    const userAns = (reviewData.answers[q.id] || '[未作答]').toString().trim();
+                                                                    const correctAns = q.answer;
+                                                                    const isCorrect = userAns.toLowerCase() === correctAns.toLowerCase() || (q.type === 'summary' && userAns.toLowerCase().includes('property') && correctAns.toLowerCase().includes('property'));
+                                                                    return (
+                                                                        <div key={q.id} className={`p-5 rounded-lg border-l-4 ${isCorrect ? 'bg-green-50 border-green-500' : 'bg-red-50 border-red-500'}`}>
+                                                                            <div className="flex items-start justify-between mb-2">
+                                                                                <p className="font-semibold text-gray-800 text-base"><span className="mr-2">Q{q.id}.</span>{q.type === 'summary' ? `[填空題] 答案為 ${correctAns}` : q.text}</p>
+                                                                                {isCorrect ? <i className="fas fa-check-circle text-green-500 text-2xl shrink-0 ml-2"></i> : <i className="fas fa-times-circle text-red-500 text-2xl shrink-0 ml-2"></i>}
+                                                                            </div>
+                                                                            <div className="grid grid-cols-2 gap-4 mt-4 text-sm font-medium">
+                                                                                <div className="bg-white p-3 rounded border border-gray-200"><span className="text-gray-500 block mb-1">您的答案</span><span className={isCorrect ? 'text-green-600' : 'text-red-600'}>{userAns}</span></div>
+                                                                                <div className="bg-white p-3 rounded border border-gray-200"><span className="text-gray-500 block mb-1">正確答案</span><span className="text-blue-600 font-bold">{correctAns}</span></div>
+                                                                            </div>
+                                                                            <div className="mt-4 text-gray-700 text-base bg-white p-4 rounded border border-gray-200 leading-relaxed">
+                                                                                <p className="mb-2"><span className="font-bold text-indigo-600">解析：</span>{q.exp}</p>
+                                                                                <p><span className="font-bold text-teal-600">同義詞替換：</span>{q.para}</p>
+                                                                            </div>
+                                                                        </div>
+                                                                    );
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    </>
+                                                )}
+                                            </div>
+                                        </section>
+                                                
+
+                                    </>
+                                ) : (
+                                    <div className="flex-1 flex items-center justify-center text-gray-500 text-lg">尚無測驗紀錄</div>
+                                )}
+                            </>
+                        )}
+                        {activeTab === 'history' && (
+                            <section className="flex-1 overflow-y-auto p-6 bg-gray-50 w-full">
+                                <div className="max-w-4xl mx-auto w-full">
+                                    <h2 className="text-3xl font-bold text-gray-800 mb-8 flex items-center"><i className="fas fa-history mr-3 text-blue-600"></i> 歷史測驗紀錄</h2>
+                                    {history.length === 0 ? (
+                                        <div className="text-center text-gray-500 py-20 bg-white rounded-xl border border-gray-200">尚無測驗紀錄</div>
+                                    ) : (
+                                        <div className="space-y-4">
+                                            {history.map((h, i) => (
+                                                <div key={h.id} className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm flex flex-col md:flex-row items-center justify-between hover:shadow-md transition">
+                                                    <div className="mb-4 md:mb-0 w-full md:w-auto">
+                                                        <div className="text-gray-500 text-sm mb-1">{h.date}</div>
+                                                        <h3 className="text-lg font-bold text-gray-800">{h.passageTitle}</h3>
+                                                    </div>
+                                                    <div className="flex items-center space-x-4">
+                                                        <div className="text-center"><div className="text-xl font-bold text-gray-800">{h.correct}/{h.total}</div><div className="text-xs text-gray-500">正確題數</div></div>
+                                                        <div className="text-center bg-blue-50 px-4 py-2 rounded-lg border border-blue-100 mr-2"><div className="text-xl font-bold text-blue-600">{h.band}</div><div className="text-xs text-blue-800">Band</div></div>
+                                                        <button onClick={() => { setCurrentReview(h); setActiveTab('review'); }} className="text-blue-600 hover:bg-blue-50 p-3 rounded-full transition flex items-center justify-center" title="查看詳細解析">
+                                                            <i className="fas fa-chevron-right text-lg"></i>
+                                                        </button>
+                                                        <button onClick={() => deleteHistory(h.id)} className="text-red-400 hover:text-red-600 hover:bg-red-50 p-3 rounded-full transition flex items-center justify-center" title="刪除此紀錄">
+                                                            <i className="fas fa-trash text-lg"></i>
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                            ))}
+                                        </div>
+                                    )}
+                                </div>
+                            </section>
+                        )}
+
+                        {activeTab === 'vocab' && (
+                            <section className="flex-1 overflow-y-auto p-6 bg-gray-50 w-full">
+                                <div className="max-w-5xl mx-auto">
+                                    <h2 className="text-3xl font-bold text-gray-800 mb-8 flex items-center"><i className="fas fa-book mr-3 text-blue-600"></i> 專屬單字庫</h2>
+                                    <div className="bg-white rounded-xl shadow-sm border border-gray-200 overflow-hidden w-full overflow-x-auto">
+                                        <table className="w-full text-left border-collapse min-w-max">
+                                            <thead>
+                                                <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider border-b border-gray-200">
+                                                    <th className="px-6 py-4 font-medium">英文單字 / 片語</th>
+                                                    <th className="px-6 py-4 font-medium">中文翻譯</th>
+                                                    <th className="px-6 py-4 font-medium w-1/3">筆記</th>
+                                                    <th className="px-6 py-4 font-medium text-right">操作</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody className="divide-y divide-gray-200">
+                                                {vocab.length === 0 ? (
+                                                    <tr><td colSpan="4" className="px-6 py-12 text-center text-gray-500">目前單字庫為空</td></tr>
+                                                ) : (
+                                                    vocab.map(v => (
+                                                        <tr key={v.id} className="hover:bg-gray-50 transition">
+                                                            <td className="px-6 py-4 text-gray-900 font-bold text-lg">{v.word}</td>
+                                                            <td className="px-6 py-4 text-blue-700 font-medium">{v.translation}</td>
+                                                            <td className="px-6 py-2">
+                                                                <textarea 
+                                                                    value={v.note || ''} 
+                                                                    onChange={(e) => updateVocabNote(v.id, e.target.value)} 
+                                                                    placeholder="點此輸入筆記..."
+                                                                    className="w-full bg-gray-50 border border-gray-200 rounded p-2 text-sm text-gray-700 focus:outline-none focus:border-blue-400 focus:bg-white resize-y min-h-[40px]"
+                                                                />
+                                                            </td>
+                                                            <td className="px-6 py-4 text-right">
+                                                                <button onClick={() => deleteVocab(v.id)} className="text-red-500 hover:text-red-700 p-2 rounded hover:bg-red-50 transition"><i className="fas fa-trash"></i></button>
+                                                            </td>
+                                                        </tr>
+                                                    ))
+                                                )}
+                                            </tbody>
+                                        </table>
+                                    </div>
+                                </div>
+                            </section>
+                        )}
+                    </main>
+
+                    {activeTab === 'test' && testState === 'ongoing' && (
+                        <footer className="h-16 flex-shrink-0 bg-gray-200 flex items-center justify-between px-6 border-t border-gray-300 z-10 w-full">
+                            <div className="px-4 py-2 bg-white text-gray-700 rounded-full font-medium border border-gray-300 shadow-sm">
+                                進度: <span className="text-blue-600 font-bold">{Object.keys(answers).length}</span> / {testData.questions.length}
+                            </div>
+                            <button onClick={submitTest} className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-2 rounded-lg font-bold shadow transition flex items-center">
+                                <i className="fas fa-save mr-2"></i> 提交答案 (Submit)
+                            </button>
+                        </footer>
+                    )}
+
+                    {toast && (
+                        <div className="fixed bottom-24 left-1/2 transform -translate-x-1/2 bg-gray-900 text-white px-6 py-3 rounded-full shadow-2xl z-50 flex items-center animate-in slide-in-from-bottom-5">
+                            <span className="font-medium">{toast}</span>
+                        </div>
+                    )}
+                </div>
+            );
+        }
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
