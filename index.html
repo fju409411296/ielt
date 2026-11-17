@@ -57,6 +57,13 @@
             
             // 👉 在這裡新增這一行：用來控制翻譯按鈕的開關狀態
             const [showTranslation, setShowTranslation] = useState(false);
+            const [showStarredVocab, setShowStarredVocab] = useState(false);
+
+            const toggleVocabStar = (id) => {
+                const updated = vocab.map(v => v.id === id ? { ...v, isStarred: !v.isStarred } : v);
+                setVocab(updated);
+                localStorage.setItem('ielts_vocab', JSON.stringify(updated));
+            };
             useEffect(() => {
                 const savedVocab = JSON.parse(localStorage.getItem('ielts_vocab') || '[]');
                 setVocab(savedVocab);
@@ -190,7 +197,9 @@
                         id: Date.now(),
                         word: word,
                         translation: translated,
-                        date: new Date().toLocaleDateString('zh-TW')
+                        date: new Date().toLocaleDateString('zh-TW'),
+                        note: '',
+                        isStarred: false
                     };
                     const updatedVocab = [newVocab, ...vocab];
                     setVocab(updatedVocab);
@@ -356,7 +365,42 @@
                             <Timer active={testState === 'ongoing'} onTimeUp={submitTest} />
                         )}
                     </header>
+                    {/* 常駐重點單字按鈕 */}
+            {activeTab !== 'home' && activeTab !== 'test' && (
+                <>
+                    <button 
+                        onClick={() => setShowStarredVocab(!showStarredVocab)}
+                        className="fixed top-20 right-6 bg-yellow-500 hover:bg-yellow-600 text-white px-5 py-3 rounded-full shadow-[0_8px_20px_-4px_rgba(0,0,0,0.3)] transition-all z-[100] flex items-center justify-center font-bold text-sm border-2 border-yellow-300 hover:scale-105"
+                    >
+                        <i className={`fas ${showStarredVocab ? 'fa-times' : 'fa-star'} mr-2`}></i>
+                        {showStarredVocab ? '關閉重點' : '重點單字'}
+                    </button>
 
+                    {/* 重點單字面板 */}
+                    {showStarredVocab && (
+                        <div className="fixed top-36 right-6 w-80 max-h-[60vh] bg-white border-2 border-yellow-400 rounded-xl shadow-2xl z-[90] flex flex-col overflow-hidden animate-in fade-in slide-in-from-right-4">
+                            <div className="bg-yellow-50 px-4 py-3 border-b border-yellow-200 flex justify-between items-center shrink-0">
+                                <h3 className="font-bold text-yellow-800"><i className="fas fa-star text-yellow-500 mr-2"></i>重點單字庫</h3>
+                                <span className="text-xs text-yellow-600 font-medium">{vocab.filter(v => v.isStarred).length} 個</span>
+                            </div>
+                            <div className="overflow-y-auto p-2 flex-1">
+                                {vocab.filter(v => v.isStarred).length === 0 ? (
+                                    <div className="text-center text-gray-400 py-8 text-sm">尚未標記任何重點單字</div>
+                                ) : (
+                                    <ul className="space-y-2">
+                                        {vocab.filter(v => v.isStarred).map(v => (
+                                            <li key={v.id} className="bg-gray-50 p-3 rounded-lg border border-gray-100 flex flex-col hover:bg-yellow-50 transition">
+                                                <span className="font-bold text-gray-800 text-base">{v.word}</span>
+                                                <span className="text-blue-600 text-sm mt-1">{v.translation}</span>
+                                            </li>
+                                        ))}
+                                    </ul>
+                                )}
+                            </div>
+                        </div>
+                    )}
+                </>
+            )}
                     {contextMenu.visible && (
                         <div style={{ top: contextMenu.y, left: contextMenu.x }} className="fixed z-50 flex flex-col bg-white border border-gray-200 rounded-lg shadow-xl py-1 min-w-[180px]" onClick={(e) => e.stopPropagation()}>
                             <button onMouseDown={highlightText} className="flex items-center px-4 py-2 hover:bg-gray-100 text-sm font-medium transition text-gray-800 w-full text-left">
@@ -616,6 +660,7 @@
                                         <table className="w-full text-left border-collapse min-w-max">
                                             <thead>
                                                 <tr className="bg-gray-100 text-gray-600 text-sm uppercase tracking-wider border-b border-gray-200">
+                                                    <th className="px-6 py-4 font-medium w-16 text-center">星號</th>
                                                     <th className="px-6 py-4 font-medium">英文單字 / 片語</th>
                                                     <th className="px-6 py-4 font-medium">中文翻譯</th>
                                                     <th className="px-6 py-4 font-medium w-1/3">筆記</th>
@@ -628,6 +673,14 @@
                                                 ) : (
                                                     vocab.map(v => (
                                                         <tr key={v.id} className="hover:bg-gray-50 transition">
+                                                            <td className="px-6 py-4 text-center">
+                                                                <button 
+                                                                    onClick={() => toggleVocabStar(v.id)}
+                                                                    className={`p-2 rounded-full transition ${v.isStarred ? 'text-yellow-500 hover:bg-yellow-50' : 'text-gray-300 hover:text-yellow-400 hover:bg-gray-100'}`}
+                                                                >
+                                                                    <i className="fas fa-star text-xl"></i>
+                                                                </button>
+                                                            </td>
                                                             <td className="px-6 py-4 text-gray-900 font-bold text-lg">{v.word}</td>
                                                             <td className="px-6 py-4 text-blue-700 font-medium">{v.translation}</td>
                                                             <td className="px-6 py-2">
