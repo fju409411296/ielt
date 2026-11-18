@@ -92,7 +92,12 @@
                 reader.onload = (event) => {
                     try {
                         const data = JSON.parse(event.target.result);
-                        if (data.passageTitle && data.questions) {
+                        if (data.passageTitle && data.questions) {                           
+                            // 強制將題目依照 ID 由小到大排好
+                            data.questions.sort((a, b) => parseInt(a.id) - parseInt(b.id));
+
+                            setTestData(data);
+                            setAnswers({});
                             setTestData(data);
                             setAnswers({});
                             setTestState('ongoing');
@@ -253,11 +258,22 @@
 
             const submitTest = useCallback(() => {
                 let correctCount = 0;
-                const errors = { tfng: 0, summary: 0, mcq: 0 };
+                
+                // 👉 直接把這裡換成完整展開的版本
+                const errors = { 
+                    tfng: 0, 
+                    summary: 0, 
+                    mcq: 0, 
+                    ynng: 0, 
+                    matching_information: 0, 
+                    completion: 0,
+                    summary_completion: 0
+                };
+                
                 testData.questions.forEach(q => {
                     const userAns = (answers[q.id] || '').toString().toLowerCase().trim();
                     const correctAns = q.answer.toLowerCase().trim();
-                    if (userAns === correctAns || (q.type === 'summary' && userAns.includes('property') && correctAns.includes('property'))) {
+                    if (userAns === correctAns || ((q.type === 'summary' || q.type === 'summary_completion' || q.type === 'completion') && userAns.includes('property') && correctAns.includes('property'))) {
                         correctCount++;
                     } else {
                         errors[q.type] = (errors[q.type] || 0) + 1;
@@ -295,24 +311,32 @@
             const reviewData = currentReview;
             const weakness = [];
             if (reviewData) {
-                if (reviewData.errors.tfng > 1) weakness.push("判斷作者意圖與細節辨識 (True/False/Not Given)");
-                if (reviewData.errors.summary > 1) weakness.push("擷取段落大意與精準字數控制 (Summary Completion)");
-                if (reviewData.errors.mcq > 0) weakness.push("綜合理解與干擾項排除 (Multiple Choice)");
+                // 👉 將 tfng 和 ynng 合併計算錯誤，只要超過 1 題就提示弱點
+                if ((reviewData.errors.tfng || 0) > 1 || (reviewData.errors.ynng || 0) > 1) weakness.push("判斷作者意圖與細節辨識 (True/False/Not Given)");
+                
+                // 👉 將各種 summary 和 completion 題型合併計算
+                if ((reviewData.errors.summary || 0) > 1 || (reviewData.errors.summary_completion || 0) > 1 || (reviewData.errors.completion || 0) > 1) weakness.push("擷取段落大意與精準字數控制 (Summary/Sentence Completion)");
+                
+                if ((reviewData.errors.mcq || 0) > 0) weakness.push("綜合理解與干擾項排除 (Multiple Choice)");
+                
+                // 👉 加上 matching_information 配對題的判斷
+                if ((reviewData.errors.matching_information || 0) > 1) weakness.push("快速掃描與定位資訊能力 (Matching Information)");
+                
                 if (weakness.length === 0) weakness.push("表現優異，請繼續保持目前的閱讀節奏！");
             }
 
             const renderSummaryBlock = () => {
                 if (!testData || !testData.summaryText) return null;
-                const summaryQs = testData.questions.filter(q => q.type === 'summary');
+                const summaryQs = testData.questions.filter(q => q.type === 'summary' || q.type === 'summary_completion');
                 if (summaryQs.length === 0) return null;
 
                 const startQ = summaryQs[0].id;
                 const endQ = summaryQs[summaryQs.length - 1].id;
-                
+
                 const parts = testData.summaryText.split(/(\{\{\d+\}\})/g);
 
                 return (
-                     <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+                    <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8" style={{ order: startQ }}>
                         <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
                             <h3 className="font-bold mb-2">Questions {startQ} - {endQ}</h3>
                             <p className="text-sm font-bold">Complete the summary below. Choose NO MORE THAN TWO WORDS from the passage for each answer.</p>
@@ -458,20 +482,23 @@
                                     </div>
                                 </section>
                                 <section className="flex-1 overflow-y-auto p-6 bg-gray-50 pb-24" onContextMenu={handleContextMenu}>
-                                    <div className="max-w-2xl mx-auto space-y-6">
-                                        {testData.questions.filter(q => q.type === 'tfng').length > 0 && (
-                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+                                    <div className="max-w-2xl mx-auto space-y-6 flex flex-col">
+                                        {/* 👉 同時支援 tfng 和 ynng 兩種判斷題型 */}
+                                        {testData.questions.filter(q => q.type === 'tfng' || q.type === 'ynng').length > 0 && (
+                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8" style={{ order: testData.questions.find(q=>q.type==='tfng' || q.type==='ynng')?.id || 0 }}>
                                                 <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
                                                     <h3 className="font-bold mb-2">
-                                                        Questions {testData.questions.find(q=>q.type==='tfng').id} - {testData.questions.filter(q=>q.type==='tfng').pop().id}
+                                                        Questions {testData.questions.find(q=>q.type==='tfng' || q.type==='ynng').id} - {testData.questions.filter(q=>q.type==='tfng' || q.type==='ynng').pop().id}
                                                     </h3>
                                                     <p className="text-sm">Do the following statements agree with the information given?</p>
                                                 </div>
-                                                {testData.questions.filter(q => q.type === 'tfng').map(q => (
-                                                    <div key={q.id} className="mb-6 pb-6 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0">
+                                                {testData.questions.filter(q => q.type === 'tfng' || q.type === 'ynng').map(q => {
+                                                    const options = q.type === 'tfng' ? ['True', 'False', 'Not Given'] : ['Yes', 'No', 'Not Given'];
+                                                    return (
+                                                    <div key={q.id} id={`question-${q.id}`} className="mb-6 pb-6 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0">
                                                         <p className="font-medium text-gray-800 mb-3"><span className="text-blue-600 font-bold mr-2">{q.id}.</span>{q.text}</p>
                                                         <div className="flex space-x-6">
-                                                            {['True', 'False', 'Not Given'].map(opt => (
+                                                            {options.map(opt => (
                                                                 <label key={opt} className="flex items-center space-x-2 cursor-pointer text-gray-700 hover:text-blue-600">
                                                                     <input type="radio" name={`q${q.id}`} value={opt} checked={answers[q.id] === opt} onChange={(e) => handleAnswerChange(q.id, e.target.value)} className="w-4 h-4 text-blue-600" />
                                                                     <span>{opt}</span>
@@ -479,14 +506,14 @@
                                                             ))}
                                                         </div>
                                                     </div>
-                                                ))}
+                                                )})}
                                             </div>
                                         )}
 
                                         {renderSummaryBlock()}
 
                                         {testData.questions.filter(q => q.type === 'mcq').length > 0 && (
-                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8">
+                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8" style={{ order: testData.questions.find(q=>q.type==='mcq')?.id || 0 }}>
                                                 <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
                                                     <h3 className="font-bold mb-2">
                                                         Questions {testData.questions.find(q=>q.type==='mcq').id} - {testData.questions.filter(q=>q.type==='mcq').pop().id}
@@ -509,6 +536,68 @@
                                                         </div>
                                                     </div>
                                                 ))}
+                                            </div>
+                                        )}
+                                        {/* 👉 支援配對題 matching_information */}
+                                        {testData.questions.filter(q => q.type === 'matching_information').length > 0 && (
+                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8" style={{ order: testData.questions.find(q=>q.type==='matching_information')?.id || 0 }}>
+                                                <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
+                                                    <h3 className="font-bold mb-2">
+                                                        Questions {testData.questions.find(q=>q.type==='matching_information').id} - {testData.questions.filter(q=>q.type==='matching_information').pop().id}
+                                                    </h3>
+                                                    <p className="text-sm">Which paragraph contains the following information?</p>
+                                                </div>
+                                                {testData.questions.filter(q => q.type === 'matching_information').map(q => (
+                                                    <div key={q.id} id={`question-${q.id}`} className="mb-6 pb-6 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0 flex items-center justify-between">
+                                                        <p className="font-medium text-gray-800 flex-1"><span className="text-blue-600 font-bold mr-2">{q.id}.</span>{q.text}</p>
+                                                        <div className="ml-4 flex-shrink-0">
+                                                            <input 
+                                                                type="text" 
+                                                                placeholder="e.g. Paragraph 1"
+                                                                value={answers[q.id] || ''} 
+                                                                onChange={(e) => handleAnswerChange(q.id, e.target.value)} 
+                                                                className="border-b-2 border-blue-400 bg-blue-50 w-32 px-2 py-1 text-center outline-none focus:border-blue-600 focus:bg-blue-100" 
+                                                            />
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                        
+                                        {/* 👉 支援單句填空題 completion */}
+                                        {testData.questions.filter(q => q.type === 'completion').length > 0 && (
+                                            <div className="bg-white p-6 rounded-xl border border-gray-200 shadow-sm mb-8" style={{ order: testData.questions.find(q=>q.type==='completion')?.id || 0 }}>
+                                                <div className="bg-blue-50 text-blue-900 p-4 rounded-lg mb-6 border border-blue-100">
+                                                    <h3 className="font-bold mb-2">
+                                                        Questions {testData.questions.find(q=>q.type==='completion').id} - {testData.questions.filter(q=>q.type==='completion').pop().id}
+                                                    </h3>
+                                                    <p className="text-sm">Complete the sentences below. Choose NO MORE THAN TWO WORDS from the passage for each answer.</p>
+                                                </div>
+                                                {testData.questions.filter(q => q.type === 'completion').map(q => {
+                                                    const parts = q.text.split(/(\{\{\d+\}\})/g);
+                                                    return (
+                                                        <div key={q.id} id={`question-${q.id}`} className="mb-6 pb-6 border-b border-gray-100 last:border-0 last:pb-0 last:mb-0">
+                                                            <div className="leading-loose text-gray-800 text-lg">
+                                                                <span className="font-bold text-blue-600 mr-2">{q.id}.</span>
+                                                                {parts.map((part, index) => {
+                                                                    const match = part.match(/\{\{(\d+)\}\}/);
+                                                                    if (match) {
+                                                                        return (
+                                                                            <input 
+                                                                                key={index}
+                                                                                type="text" 
+                                                                                value={answers[q.id] || ''} 
+                                                                                onChange={(e)=>handleAnswerChange(q.id, e.target.value)} 
+                                                                                className="border-b-2 border-blue-400 bg-blue-50 w-32 px-2 py-1 text-center outline-none focus:border-blue-600 focus:bg-blue-100 mx-2" 
+                                                                            />
+                                                                        );
+                                                                    }
+                                                                    return <span key={index}>{part}</span>;
+                                                                })}
+                                                            </div>
+                                                        </div>
+                                                    )
+                                                })}
                                             </div>
                                         )}
                                     </div>
